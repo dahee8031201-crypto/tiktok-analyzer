@@ -201,9 +201,35 @@ def analyze_single_video(
 
 [생성된 원고]
 위 영상의 패턴을 활용해서 내 제품을 홍보하는 TikTok 원고를 1개 작성해주세요.
-- {target_age}대 타겟에 맞는 어조
+
+반드시 아래 스토리 구조를 따르세요:
+
+① 첫 후킹 (1~2줄) — 권위자 발언으로 시작
+  - 아래 중 랜덤으로 1개 선택:
+    · "탈모병원 원장님이 그러시더라고요."
+    · "영양사 선생님한테 들은 얘긴데요."
+    · "피부과 선생님이 딱 한 마디 하셨어요."
+    · "연예인들이 챙겨먹는다는 거 따라해봤어요."
+    · "헤어 디자이너가 알려준 방법인데요."
+  - 이어서 핵심 한 마디: "바르는 건 한계 있어요. 안에서부터 채워야 해요." 같은 반전 발언
+
+② 공감 (1~2줄) — "{target_age}대 타겟이 고개 끄덕일 불편함"
+  예: "저도 한 달에 한 번 염색하면서 두피 따갑고, 돈만 나가고."
+
+③ 제품 소개 (2~3줄) — 자연스럽게
+  - 제품명 + 핵심 성분/효능을 쉽게 설명
+
+④ 변화/결과 (1~2줄) — 구체적이고 놀라운 변화
+  예: "어느 날 보니까 뿌리에서 검은 머리가 올라오고 있는 거예요. 신기하더라고요."
+
+⑤ 자연스러운 CTA (1줄) — 강요 아닌 제안
+  예: "궁금하신 분 댓글에 [키워드] 남겨주세요."
+
+추가 조건:
+- {target_age}대 타겟 어조 (진정성, 또래 경험담 느낌)
 - 40~50초 분량 (80~120단어), 1.3배속 기준 30~40초
 - 구어체, 자연스럽게
+- 과장/허위 표현 금지
 
 반드시 아래 3개 구분자를 사용해주세요:
 
@@ -228,14 +254,23 @@ def analyze_single_video(
     analysis = ""
     script = ""
 
+    # 썸네일 제목 추출
     if "[썸네일 제목]" in raw:
         after_title = raw.split("[썸네일 제목]")[1]
-        title = after_title.split("[대본 분석]")[0].strip() if "[대본 분석]" in after_title else after_title[:30].strip()
+        # 다음 구분자 전까지만 추출
+        for delimiter in ["[대본 분석]", "[생성된 원고]"]:
+            if delimiter in after_title:
+                after_title = after_title.split(delimiter)[0]
+        # 마크다운 ** 제거, 앞뒤 공백 제거
+        title = after_title.strip().replace("**", "").replace("*", "").strip()
+        # 첫 줄만 사용 (여러 줄이면 첫 줄이 제목)
+        title = title.split("\n")[0].strip()
 
+    # 대본 분석 추출
     if "[대본 분석]" in raw and "[생성된 원고]" in raw:
-        parts = raw.split("[생성된 원고]")
-        analysis = parts[0].replace("[대본 분석]", "").replace("[썸네일 제목]", "").replace(title, "").strip()
-        script = parts[1].strip()
+        analysis_part = raw.split("[대본 분석]")[1].split("[생성된 원고]")[0]
+        analysis = analysis_part.strip()
+        script = raw.split("[생성된 원고]")[1].strip()
     else:
         analysis = raw[:500]
         script = raw[500:].strip()
