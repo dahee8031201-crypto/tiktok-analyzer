@@ -11,7 +11,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-# ── 함수 정의 (호출보다 먼저) ────────────────────────────────
+# ── 페이지 설정 ──────────────────────────────────────────────
+
+st.set_page_config(
+    page_title="TikTok 바이럴 분석기",
+    page_icon="🎵",
+    layout="wide"
+)
+
+
+# ── 유틸 함수 ────────────────────────────────────────────────
 
 def _transcribe_single(model, audio_path: str) -> str:
     try:
@@ -27,177 +36,161 @@ def _transcribe_single(model, audio_path: str) -> str:
         return ""
 
 
-def save_results_to_file(results, videos, target_age):
+def save_results_to_file(scripts, target_age):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     os.makedirs("output", exist_ok=True)
     path = f"output/scripts_{target_age}대_{timestamp}.txt"
-
     with open(path, "w", encoding="utf-8") as f:
         f.write(f"TikTok 바이럴 분석 결과\n생성일시: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write("="*60 + "\n\n")
-        f.write("[ 바이럴 패턴 분석 ]\n" + results["analysis"] + "\n\n")
-        f.write("[ 생성된 원고 ]\n")
-        for i, script in enumerate(results["scripts"], 1):
-            f.write(f"\n--- 원고 {i} ---\n{script}\n")
-
-    st.success(f"✅ 로컬 파일 저장 완료: `{path}`")
-
-
-def export_to_notion(notion_token, notion_page_id, keyword, target_age,
-                     product_info, urls, videos, results):
-    from notion_exporter import save_to_notion
-    try:
-        with st.spinner("노션에 저장 중..."):
-            page_url = save_to_notion(
-                notion_token=notion_token,
-                database_id=notion_page_id,
-                keyword=keyword,
-                target_age=target_age,
-                product_info=product_info,
-                urls=urls,
-                videos=videos,
-                results=results,
-            )
-        st.success(f"✅ 노션 저장 완료!")
-        st.markdown(f"[📎 노션에서 보기]({page_url})", unsafe_allow_html=False)
-    except Exception as e:
-        st.error(f"노션 저장 실패: {e}")
-        st.caption("Integration이 페이지에 연결되어 있는지 확인해주세요.")
+        f.write("=" * 60 + "\n\n")
+        for i, item in enumerate(scripts, 1):
+            f.write(f"\n--- 영상 {i} ---\n")
+            f.write(f"URL: {item.get('url','')}\n")
+            f.write(f"썸네일 제목: {item.get('title','')}\n\n")
+            f.write(f"[대본 분석]\n{item.get('analysis','')}\n\n")
+            f.write(f"[생성된 원고]\n{item.get('script','')}\n")
+    return path
 
 
 def run_analysis(urls, product_info, api_key, target_age, whisper_model,
                  keyword="탈모", notion_token=None, notion_page_id=None):
+    """분석 실행 후 결과를 session_state에 저장"""
     from crawler import _download_audio
-    from analyzer import analyze_and_generate
     from faster_whisper import WhisperModel
+    from analyzer import analyze_single_video
+    from notion_exporter import save_video_to_notion
+    from history import save_history
 
     output_dir = "output"
     audio_dir = os.path.join(output_dir, "audio")
     os.makedirs(audio_dir, exist_ok=True)
 
-    st.divider()
-    st.subheader("📥 영상 다운로드 및 음성 변환")
+    status = st.empty()
+    progress_bar = st.progress(0)
+    log_area = st.empty()
+    logs = []
+
+    def update_log(msg):
+        logs.append(msg)
+        log_area.markdown("\n".join(f"- {m}" for m in logs[-8:]))
 
     # ── 1단계: 다운로드 ──
+    status.info("📥 영상 다운로드 중...")
     videos = []
-    download_progress = st.progress(0, text="다운로드 준비 중...")
-
     for i, url in enumerate(urls):
-        download_progress.progress(i / len(urls), text=f"다운로드 중 ({i+1}/{len(urls)}): {url[:50]}...")
+        progress_bar.progress((i + 1) / (len(urls) * 3), text=f"다운로드 ({i+1}/{len(urls)})")
+        update_log(f"⬇️ 다운로드 중: {url[:60]}...")
         audio_path = _download_audio(url, audio_dir, f"video_{i+1}_{int(datetime.now().timestamp())}")
         if audio_path:
             videos.append({"url": url, "title": f"영상 {i+1}", "audio_path": audio_path, "views": 0, "likes": 0})
+            update_log(f"✅ 다운로드 완료: 영상 {i+1}")
         else:
-            st.warning(f"⚠️ 다운로드 실패: {url[:60]}")
-
-    download_progress.progress(1.0, text=f"✅ 다운로드 완료 ({len(videos)}/{len(urls)}개)")
+            update_log(f"❌ 다운로드 실패: {url[:60]}")
 
     if not videos:
-        st.error("다운로드된 영상이 없습니다. URL을 확인해주세요.")
+        status.error("다운로드된 영상이 없습니다. URL을 확인해주세요.")
+        progress_bar.empty()
+        log_area.empty()
         return
 
     # ── 2단계: 음성 변환 ──
-    st.info(f"🎙️ Whisper({whisper_model}) 모델로 음성 변환 중... (첫 실행 시 모델 다운로드로 수 분 소요)")
-    whisper_progress = st.progress(0, text="Whisper 모델 로딩 중...")
+    status.info(f"🎙️ Whisper({whisper_model})로 음성 변환 중...")
+    update_log(f"🔄 Whisper {whisper_model} 모델 로딩 중...")
 
     model = WhisperModel(whisper_model, device="cpu", compute_type="int8")
+    update_log("✅ Whisper 모델 준비 완료")
 
     valid_videos = []
+    base = len(urls)
     for i, video in enumerate(videos):
-        whisper_progress.progress(i / len(videos), text=f"음성 변환 중 ({i+1}/{len(videos)}): {video['title']}")
+        progress_bar.progress((base + i + 1) / (len(urls) * 3), text=f"음성 변환 ({i+1}/{len(videos)})")
+        update_log(f"🎙️ 변환 중: {video['title']}")
         transcript = _transcribe_single(model, video["audio_path"])
         if len(transcript) >= 30:
             video["transcript"] = transcript
             valid_videos.append(video)
+            update_log(f"✅ 변환 완료: {video['title']} ({len(transcript)}자)")
         else:
-            st.warning(f"⚠️ {video['title']}: 음성 내용 부족 (배경음악만 있는 영상으로 추정)")
-
-    whisper_progress.progress(1.0, text=f"✅ 음성 변환 완료 ({len(valid_videos)}개)")
+            update_log(f"⚠️ {video['title']}: 음성 내용 부족 (배경음악만 있는 영상으로 추정)")
 
     if not valid_videos:
-        st.error("변환된 음성 원고가 없습니다.")
+        status.error("변환된 음성 원고가 없습니다.")
+        progress_bar.empty()
+        log_area.empty()
         return
 
-    # ── 3단계: 영상별 분석 + 원고 생성 + 노션 저장 ──
-    from analyzer import analyze_single_video
-    from notion_exporter import save_video_to_notion
-
-    st.divider()
-    st.subheader("🔍 영상별 분석 및 원고 생성")
-
+    # ── 3단계: 분석 + 원고 생성 ──
+    status.info("🤖 Claude AI 분석 중...")
     all_results = []
     for i, video in enumerate(valid_videos):
-        with st.container(border=True):
-            st.caption(f"🔗 {video['url'][:60]}...")
+        progress_bar.progress((base * 2 + i + 1) / (len(urls) * 3), text=f"AI 분석 ({i+1}/{len(valid_videos)})")
+        update_log(f"🔍 Claude 분석 중: {video['title']}")
 
-            with st.spinner(f"Claude 분석 중 ({i+1}/{len(valid_videos)})..."):
-                result = analyze_single_video(
-                    transcript=video["transcript"],
+        result = analyze_single_video(
+            transcript=video["transcript"],
+            product_info=product_info,
+            api_key=api_key,
+            target_age=target_age,
+        )
+        update_log(f"✅ 분석 완료: {video['title']} → 제목: {result.get('title','')}")
+
+        # 노션 저장
+        notion_url = None
+        if notion_token and notion_page_id:
+            try:
+                notion_url = save_video_to_notion(
+                    notion_token=notion_token,
+                    database_id=notion_page_id,
+                    keyword=keyword,
                     product_info=product_info,
-                    api_key=api_key,
-                    target_age=target_age,
+                    url=video["url"],
+                    transcript=video["transcript"],
+                    analysis=result["analysis"],
+                    script=result["script"],
+                    thumbnail_title=result.get("title", ""),
                 )
+                update_log(f"📒 노션 저장 완료: {video['title']}")
+            except Exception as e:
+                update_log(f"⚠️ 노션 저장 실패: {e}")
 
-            if result.get("title"):
-                st.markdown(f"**🎯 썸네일 제목:** `{result['title']}`")
+        # 이력 저장
+        product_name_extracted = ""
+        for line in product_info.split("\n"):
+            if "제품명" in line:
+                product_name_extracted = line.split(":")[-1].strip()
+                break
+        save_history(
+            keyword=keyword,
+            product_name=product_name_extracted,
+            url=video["url"],
+            transcript=video["transcript"],
+            analysis=result["analysis"],
+            script=result["script"],
+            title=result.get("title", ""),
+        )
 
-            st.markdown("**📊 대본 분석**")
-            st.info(result["analysis"])
+        all_results.append({
+            "url": video["url"],
+            "title": result.get("title", ""),
+            "analysis": result["analysis"],
+            "script": result["script"],
+            "notion_url": notion_url,
+        })
 
-            st.markdown("**✍️ 생성된 원고**")
-            st.text_area("", value=result["script"], height=250,
-                         key=f"script_{i}", label_visibility="collapsed")
+    # 로컬 파일 저장
+    saved_path = save_results_to_file(all_results, target_age)
+    update_log(f"💾 로컬 파일 저장: {saved_path}")
 
-            # 노션 저장
-            if notion_token and notion_page_id:
-                try:
-                    page_url = save_video_to_notion(
-                        notion_token=notion_token,
-                        database_id=notion_page_id,
-                        keyword=keyword,
-                        product_info=product_info,
-                        url=video["url"],
-                        transcript=video["transcript"],
-                        analysis=result["analysis"],
-                        script=result["script"],
-                        thumbnail_title=result.get("title", ""),
-                    )
-                    st.success(f"✅ 노션 저장 완료")
-                    st.markdown(f"[📎 노션에서 보기]({page_url})")
-                except Exception as e:
-                    st.error(f"노션 저장 실패: {e}")
+    progress_bar.progress(1.0, text="✅ 분석 완료!")
+    status.success(f"🎉 분석 완료! 총 {len(all_results)}개 원고 생성됨")
+    log_area.empty()
 
-            # 이력 저장
-            from history import save_history
-            product_name_extracted = ""
-            for line in product_info.split("\n"):
-                if "제품명" in line:
-                    product_name_extracted = line.split(":")[-1].strip()
-                    break
-            save_history(
-                keyword=keyword,
-                product_name=product_name_extracted,
-                url=video["url"],
-                transcript=video["transcript"],
-                analysis=result["analysis"],
-                script=result["script"],
-                title=result.get("title", ""),
-            )
-
-            all_results.append({**video, **result})
-
-    # ── 로컬 파일 저장 ──
-    save_results_to_file({"analysis": "", "scripts": [r["script"] for r in all_results]},
-                         valid_videos, target_age)
+    # session_state에 결과 저장
+    st.session_state["analysis_results"] = all_results
+    st.session_state["analysis_done"] = True
 
 
-# ── 페이지 설정 ──────────────────────────────────────────────
-
-st.set_page_config(
-    page_title="TikTok 바이럴 분석기",
-    page_icon="🎵",
-    layout="wide"
-)
+# ── 앱 UI ────────────────────────────────────────────────────
 
 st.title("🎵 TikTok 바이럴 분석기")
 st.caption("탈모 영상 URL을 붙여넣으면 패턴 분석 후 내 제품 원고를 자동 생성합니다.")
@@ -224,7 +217,6 @@ with st.sidebar:
     options = ["✏️ 직접 입력 (새 제품)"] + profile_names
     selected = st.selectbox("저장된 프로필 선택", options, index=0)
 
-    # 선택된 프로필 데이터 불러오기
     if selected != "✏️ 직접 입력 (새 제품)":
         profiles = load_profiles()
         p = profiles.get(selected, {})
@@ -242,7 +234,6 @@ with st.sidebar:
                                     placeholder="예: 이번 주 할인 이벤트 중, 신규 성분 추가됨",
                                     height=60)
 
-    # 프로필 저장/삭제 버튼
     col_save, col_del = st.columns(2)
     with col_save:
         save_name = st.text_input("저장할 프로필 이름", value=product_name, label_visibility="collapsed",
@@ -291,6 +282,7 @@ with st.sidebar:
     )
     use_notion = st.toggle("분석 완료 시 노션 자동 저장", value=bool(notion_token and notion_database_id))
 
+
 # ── 탭1: 분석 시작 ───────────────────────────────────────────
 with tab_main:
     st.subheader("📎 영상 URL 입력")
@@ -308,7 +300,12 @@ with tab_main:
     with col1:
         run_btn = st.button("🚀 분석 시작", type="primary", use_container_width=True)
 
+    # 분석 실행
     if run_btn:
+        # 이전 결과 초기화
+        st.session_state["analysis_done"] = False
+        st.session_state["analysis_results"] = []
+
         errors = []
         if not api_key:
             errors.append("사이드바에서 Anthropic API 키를 입력해주세요.")
@@ -319,7 +316,7 @@ with tab_main:
 
         urls = [u.strip() for u in urls_input.strip().split("\n") if u.strip().startswith("http")]
         if not urls:
-            errors.append("유효한 TikTok URL이 없습니다. (http로 시작하는 URL을 입력해주세요)")
+            errors.append("유효한 URL이 없습니다. (http로 시작하는 URL을 입력해주세요)")
 
         if errors:
             for e in errors:
@@ -332,16 +329,54 @@ with tab_main:
             if product_extra.strip():
                 product_info += f"\n오늘 추가 강조사항: {product_extra}"
 
-            run_analysis(urls, product_info, api_key, target_age, whisper_model,
-                         keyword=keyword,
-                         notion_token=notion_token if use_notion else None,
-                         notion_page_id=notion_database_id if use_notion else None)
+            run_analysis(
+                urls, product_info, api_key, target_age, whisper_model,
+                keyword=keyword,
+                notion_token=notion_token if use_notion else None,
+                notion_page_id=notion_database_id if use_notion else None,
+            )
+
+    # ── 결과 렌더링 (session_state에서) ──
+    if st.session_state.get("analysis_done") and st.session_state.get("analysis_results"):
+        st.divider()
+        st.subheader("📝 분석 결과")
+
+        results = st.session_state["analysis_results"]
+        for i, item in enumerate(results):
+            st.markdown(f"### 영상 {i+1}")
+            st.caption(f"🔗 {item.get('url', '')[:80]}")
+
+            if item.get("title"):
+                st.markdown(f"**🎯 썸네일 제목:** `{item['title']}`")
+
+            st.markdown("**📊 대본 분석**")
+            st.info(item["analysis"])
+
+            st.markdown("**✍️ 생성된 원고**")
+            st.text_area(
+                label="생성된 원고",
+                value=item["script"],
+                height=250,
+                key=f"result_script_{i}",
+                label_visibility="collapsed",
+            )
+
+            if item.get("notion_url"):
+                st.markdown(f"[📎 노션에서 보기]({item['notion_url']})")
+
+            if i < len(results) - 1:
+                st.divider()
+
 
 # ── 탭2: 분석 이력 ───────────────────────────────────────────
 with tab_history:
     from history import load_history, delete_history
 
     st.subheader("📋 분석 이력")
+
+    # 새로고침 버튼
+    if st.button("🔄 새로고침", key="refresh_history"):
+        st.rerun()
 
     records = load_history()
 
@@ -351,39 +386,52 @@ with tab_history:
         # 검색/필터
         col_search, col_filter = st.columns([2, 1])
         with col_search:
-            search = st.text_input("🔍 검색", placeholder="키워드, 제품명, 제목으로 검색", label_visibility="collapsed")
+            search = st.text_input("🔍 검색", placeholder="키워드, 제품명, 제목으로 검색",
+                                   label_visibility="collapsed", key="history_search")
         with col_filter:
-            keywords = ["전체"] + list(set(r.get("keyword", "") for r in records if r.get("keyword")))
-            filter_keyword = st.selectbox("키워드 필터", keywords, label_visibility="collapsed")
+            kw_options = ["전체"] + list(set(r.get("keyword", "") for r in records if r.get("keyword")))
+            filter_keyword = st.selectbox("키워드 필터", kw_options,
+                                          label_visibility="collapsed", key="history_filter")
 
         # 필터링
         filtered = records
         if filter_keyword != "전체":
             filtered = [r for r in filtered if r.get("keyword") == filter_keyword]
         if search:
+            s = search.lower()
             filtered = [r for r in filtered if
-                        search.lower() in r.get("keyword", "").lower() or
-                        search.lower() in r.get("product_name", "").lower() or
-                        search.lower() in r.get("title", "").lower() or
-                        search.lower() in r.get("script", "").lower()]
+                        s in r.get("keyword", "").lower() or
+                        s in r.get("product_name", "").lower() or
+                        s in r.get("title", "").lower() or
+                        s in r.get("script", "").lower()]
 
         st.caption(f"총 {len(filtered)}건")
 
         for record in filtered:
-            title = record.get("title") or f"[{record.get('keyword')}] {record.get('product_name')}"
-            with st.expander(f"**{title}** — {record.get('date')} · {record.get('keyword')} · {record.get('product_name')}"):
+            rec_id = record.get("id", 0)
+            label = record.get("title") or f"[{record.get('keyword')}] {record.get('product_name')}"
+            date_str = record.get("date", "")
+            kw_str = record.get("keyword", "")
+            pname = record.get("product_name", "")
 
+            with st.expander(f"**{label}** — {date_str} · {kw_str} · {pname}"):
                 col_url, col_del = st.columns([4, 1])
                 with col_url:
                     st.caption(f"🔗 {record.get('url', '')[:80]}")
                 with col_del:
-                    if st.button("🗑️ 삭제", key=f"del_{record['id']}"):
-                        delete_history(record["id"])
-                        st.success("삭제됐어요. 새로고침하면 반영돼요.")
+                    del_key = f"del_{rec_id}"
+                    if st.button("🗑️ 삭제", key=del_key):
+                        delete_history(rec_id)
+                        st.rerun()
 
                 st.markdown("**📊 대본 분석**")
                 st.info(record.get("analysis", ""))
 
                 st.markdown("**✍️ 생성된 원고**")
-                st.text_area("", value=record.get("script", ""), height=250,
-                             key=f"hist_script_{record['id']}", label_visibility="collapsed")
+                st.text_area(
+                    label="원고",
+                    value=record.get("script", ""),
+                    height=250,
+                    key=f"hist_script_{rec_id}",
+                    label_visibility="collapsed",
+                )
