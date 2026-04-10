@@ -167,6 +167,23 @@ def run_analysis(urls, product_info, api_key, target_age, whisper_model,
                 except Exception as e:
                     st.error(f"노션 저장 실패: {e}")
 
+            # 이력 저장
+            from history import save_history
+            product_name_extracted = ""
+            for line in product_info.split("\n"):
+                if "제품명" in line:
+                    product_name_extracted = line.split(":")[-1].strip()
+                    break
+            save_history(
+                keyword=keyword,
+                product_name=product_name_extracted,
+                url=video["url"],
+                transcript=video["transcript"],
+                analysis=result["analysis"],
+                script=result["script"],
+                title=result.get("title", ""),
+            )
+
             all_results.append({**video, **result})
 
     # ── 로컬 파일 저장 ──
@@ -184,6 +201,8 @@ st.set_page_config(
 
 st.title("🎵 TikTok 바이럴 분석기")
 st.caption("탈모 영상 URL을 붙여넣으면 패턴 분석 후 내 제품 원고를 자동 생성합니다.")
+
+tab_main, tab_history = st.tabs(["🚀 분석 시작", "📋 분석 이력"])
 
 # ── 사이드바 ─────────────────────────────────────────────────
 with st.sidebar:
@@ -272,48 +291,99 @@ with st.sidebar:
     )
     use_notion = st.toggle("분석 완료 시 노션 자동 저장", value=bool(notion_token and notion_database_id))
 
-# ── 메인: URL 입력 ───────────────────────────────────────────
-st.subheader("📎 영상 URL 입력")
-keyword = st.text_input("키워드 (노션 저장 시 태그로 사용)", placeholder="예: 탈모, 중년탈모", value="탈모")
-st.caption("TikTok 또는 YouTube Shorts 링크를 한 줄에 하나씩 붙여넣기 (혼합 가능)")
+# ── 탭1: 분석 시작 ───────────────────────────────────────────
+with tab_main:
+    st.subheader("📎 영상 URL 입력")
+    keyword = st.text_input("키워드 (노션 저장 시 태그로 사용)", placeholder="예: 탈모, 중년탈모", value="탈모")
+    st.caption("TikTok 또는 YouTube Shorts 링크를 한 줄에 하나씩 붙여넣기 (혼합 가능)")
 
-urls_input = st.text_area(
-    "URL 목록",
-    placeholder="https://www.tiktok.com/@user1/video/...\nhttps://youtube.com/shorts/...\nhttps://www.youtube.com/watch?v=...",
-    height=200,
-    label_visibility="collapsed"
-)
+    urls_input = st.text_area(
+        "URL 목록",
+        placeholder="https://www.tiktok.com/@user1/video/...\nhttps://youtube.com/shorts/...\nhttps://www.youtube.com/watch?v=...",
+        height=200,
+        label_visibility="collapsed"
+    )
 
-col1, col2 = st.columns([1, 4])
-with col1:
-    run_btn = st.button("🚀 분석 시작", type="primary", use_container_width=True)
+    col1, col2 = st.columns([1, 4])
+    with col1:
+        run_btn = st.button("🚀 분석 시작", type="primary", use_container_width=True)
 
-# ── 실행 ────────────────────────────────────────────────────
-if run_btn:
-    errors = []
-    if not api_key:
-        errors.append("사이드바에서 Anthropic API 키를 입력해주세요.")
-    if not product_name:
-        errors.append("사이드바에서 제품명을 입력해주세요.")
-    if not urls_input.strip():
-        errors.append("분석할 TikTok URL을 입력해주세요.")
+    if run_btn:
+        errors = []
+        if not api_key:
+            errors.append("사이드바에서 Anthropic API 키를 입력해주세요.")
+        if not product_name:
+            errors.append("사이드바에서 제품명을 입력해주세요.")
+        if not urls_input.strip():
+            errors.append("분석할 TikTok URL을 입력해주세요.")
 
-    urls = [u.strip() for u in urls_input.strip().split("\n") if u.strip().startswith("http")]
-    if not urls:
-        errors.append("유효한 TikTok URL이 없습니다. (http로 시작하는 URL을 입력해주세요)")
+        urls = [u.strip() for u in urls_input.strip().split("\n") if u.strip().startswith("http")]
+        if not urls:
+            errors.append("유효한 TikTok URL이 없습니다. (http로 시작하는 URL을 입력해주세요)")
 
-    if errors:
-        for e in errors:
-            st.error(e)
-    else:
-        product_info = f"""제품명: {product_name}
+        if errors:
+            for e in errors:
+                st.error(e)
+        else:
+            product_info = f"""제품명: {product_name}
 주요 특징/효능: {product_features}
 타겟 고객: {product_target}
 차별점: {product_diff}"""
-        if product_extra.strip():
-            product_info += f"\n오늘 추가 강조사항: {product_extra}"
+            if product_extra.strip():
+                product_info += f"\n오늘 추가 강조사항: {product_extra}"
 
-        run_analysis(urls, product_info, api_key, target_age, whisper_model,
-                     keyword=keyword,
-                     notion_token=notion_token if use_notion else None,
-                     notion_page_id=notion_database_id if use_notion else None)
+            run_analysis(urls, product_info, api_key, target_age, whisper_model,
+                         keyword=keyword,
+                         notion_token=notion_token if use_notion else None,
+                         notion_page_id=notion_database_id if use_notion else None)
+
+# ── 탭2: 분석 이력 ───────────────────────────────────────────
+with tab_history:
+    from history import load_history, delete_history
+
+    st.subheader("📋 분석 이력")
+
+    records = load_history()
+
+    if not records:
+        st.info("아직 분석 이력이 없습니다. 영상을 분석하면 여기에 자동으로 저장됩니다.")
+    else:
+        # 검색/필터
+        col_search, col_filter = st.columns([2, 1])
+        with col_search:
+            search = st.text_input("🔍 검색", placeholder="키워드, 제품명, 제목으로 검색", label_visibility="collapsed")
+        with col_filter:
+            keywords = ["전체"] + list(set(r.get("keyword", "") for r in records if r.get("keyword")))
+            filter_keyword = st.selectbox("키워드 필터", keywords, label_visibility="collapsed")
+
+        # 필터링
+        filtered = records
+        if filter_keyword != "전체":
+            filtered = [r for r in filtered if r.get("keyword") == filter_keyword]
+        if search:
+            filtered = [r for r in filtered if
+                        search.lower() in r.get("keyword", "").lower() or
+                        search.lower() in r.get("product_name", "").lower() or
+                        search.lower() in r.get("title", "").lower() or
+                        search.lower() in r.get("script", "").lower()]
+
+        st.caption(f"총 {len(filtered)}건")
+
+        for record in filtered:
+            title = record.get("title") or f"[{record.get('keyword')}] {record.get('product_name')}"
+            with st.expander(f"**{title}** — {record.get('date')} · {record.get('keyword')} · {record.get('product_name')}"):
+
+                col_url, col_del = st.columns([4, 1])
+                with col_url:
+                    st.caption(f"🔗 {record.get('url', '')[:80]}")
+                with col_del:
+                    if st.button("🗑️ 삭제", key=f"del_{record['id']}"):
+                        delete_history(record["id"])
+                        st.rerun()
+
+                st.markdown("**📊 대본 분석**")
+                st.info(record.get("analysis", ""))
+
+                st.markdown("**✍️ 생성된 원고**")
+                st.text_area("", value=record.get("script", ""), height=250,
+                             key=f"hist_script_{record['id']}", label_visibility="collapsed")
