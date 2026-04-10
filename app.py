@@ -127,7 +127,7 @@ def run_analysis(urls, product_info, api_key, target_age, whisper_model,
 
     all_results = []
     for i, video in enumerate(valid_videos):
-        with st.expander(f"영상 {i+1} 처리 중...", expanded=True):
+        with st.container(border=True):
             st.caption(f"🔗 {video['url'][:60]}...")
 
             with st.spinner(f"Claude 분석 중 ({i+1}/{len(valid_videos)})..."):
@@ -379,7 +379,7 @@ with tab_history:
                 with col_del:
                     if st.button("🗑️ 삭제", key=f"del_{record['id']}"):
                         delete_history(record["id"])
-                        st.rerun()
+                        st.success("삭제됐어요. 새로고침하면 반영돼요.")
 
                 st.markdown("**📊 대본 분석**")
                 st.info(record.get("analysis", ""))
