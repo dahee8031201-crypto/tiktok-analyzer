@@ -11,6 +11,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _get_secret(key: str, default: str = "") -> str:
+    """Streamlit Cloud secrets → .env → 기본값 순서로 읽기"""
+    try:
+        return st.secrets.get(key, os.getenv(key, default))
+    except Exception:
+        return os.getenv(key, default)
+
+
 # ── 페이지 설정 ──────────────────────────────────────────────
 
 st.set_page_config(
@@ -203,7 +211,7 @@ with st.sidebar:
 
     api_key = st.text_input(
         "Anthropic API 키",
-        value=os.getenv("ANTHROPIC_API_KEY", ""),
+        value=_get_secret("ANTHROPIC_API_KEY"),
         type="password",
         help="console.anthropic.com 에서 발급"
     )
@@ -269,14 +277,14 @@ with st.sidebar:
     st.header("📒 노션 연동")
     notion_token = st.text_input(
         "Notion Integration Token",
-        value=os.getenv("NOTION_TOKEN", ""),
+        value=_get_secret("NOTION_TOKEN"),
         type="password",
         placeholder="ntn_...",
         help="notion.so/my-integrations 에서 발급"
     )
     notion_database_id = st.text_input(
         "노션 데이터베이스 ID",
-        value=os.getenv("NOTION_DATABASE_ID", ""),
+        value=_get_secret("NOTION_DATABASE_ID"),
         placeholder="데이터베이스 URL 32자리",
         help="노션 데이터베이스 URL에서 복사"
     )
