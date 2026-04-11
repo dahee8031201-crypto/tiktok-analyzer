@@ -220,29 +220,30 @@ def analyze_single_video(
 - 과장/허위 표현 금지
 - CTA는 부담 없고 자연스럽게 (강요 느낌 금지)
 
-반드시 아래 3개 구분자를 사용해주세요:
+반드시 아래 순서와 구분자를 사용해주세요:
+
+"[대본 분석]" — 분석 내용 (5줄 이내)
+
+"[생성된 원고]" — 원고 내용
 
 "[썸네일 제목]"
-— 생성된 원고를 읽고 아래 순서로 제목을 만들어라:
+— 위에서 방금 완성한 원고를 바탕으로 아래 순서대로 제목 1개를 만들어라:
 
-  1단계: 원고에서 핵심 결과를 뽑아라
+  1단계: 완성된 원고에서 핵심 결과를 뽑아라
      (예: 앞머리 채워짐 / 새치 줄어듦 / 정수리 꽉 참 / 흰머리 없어짐)
 
   2단계: 원고 속 인물의 나이·상황을 살려라
      (예: 환갑 엄마 / 예순둘 시어머니 / 동창 모임 / 남편이 먼저 알아봄)
 
-  3단계: 아래 공식 중 원고에 가장 어울리는 것 1개 골라 작성:
+  3단계: 아래 공식 중 원고 내용에 가장 어울리는 것 1개 골라 작성:
      · [나이] + 결과 직접 표현  →  "60세 엄마 앞머리 채워진 이유"
      · 반전 서사형              →  "새치로 망신당한 날 한 달 뒤 생긴 일"
      · 또래 비교형              →  "정수리 비었던 친구 꽉 찬 비법"
      · 행동 반전형              →  "우유 마셨더니 흰머리가 없어졌다"
 
-  — 결과를 직접 말하되, 어떻게 됐는지는 살짝 열어둘 것
+  — 결과를 직접 말하되 어떻게 됐는지는 살짝 열어둘 것
   — 15자 이내, 제품명 절대 금지, 마침표 금지
-  — 모든 원고마다 반드시 다른 공식을 사용할 것
-
-"[대본 분석]" — 분석 내용
-"[생성된 원고]" — 원고 내용"""
+  — 제목만 딱 한 줄로 작성, 설명 금지"""
         }]
     )
 
@@ -252,26 +253,29 @@ def analyze_single_video(
     analysis = ""
     script = ""
 
-    # 썸네일 제목 추출
-    if "[썸네일 제목]" in raw:
-        after_title = raw.split("[썸네일 제목]")[1]
-        # 다음 구분자 전까지만 추출
-        for delimiter in ["[대본 분석]", "[생성된 원고]"]:
-            if delimiter in after_title:
-                after_title = after_title.split(delimiter)[0]
-        # 마크다운 ** 제거, 앞뒤 공백 제거
-        title = after_title.strip().replace("**", "").replace("*", "").strip()
-        # 첫 줄만 사용 (여러 줄이면 첫 줄이 제목)
-        title = title.split("\n")[0].strip()
+    # 순서: [대본 분석] → [생성된 원고] → [썸네일 제목]
+    has_analysis = "[대본 분석]" in raw
+    has_script   = "[생성된 원고]" in raw
+    has_title    = "[썸네일 제목]" in raw
 
-    # 대본 분석 추출
-    if "[대본 분석]" in raw and "[생성된 원고]" in raw:
-        analysis_part = raw.split("[대본 분석]")[1].split("[생성된 원고]")[0]
-        analysis = analysis_part.strip()
-        script = raw.split("[생성된 원고]")[1].strip()
+    if has_analysis and has_script:
+        analysis = raw.split("[대본 분석]")[1].split("[생성된 원고]")[0].strip()
+
+        script_part = raw.split("[생성된 원고]")[1]
+        if has_title:
+            script = script_part.split("[썸네일 제목]")[0].strip()
+        else:
+            script = script_part.strip()
     else:
         analysis = raw[:500]
-        script = raw[500:].strip()
+        script   = raw[500:].strip()
+
+    # 썸네일 제목 추출 (원고 다음에 위치)
+    if has_title:
+        after_title = raw.split("[썸네일 제목]")[1].strip()
+        # 마크다운 제거 후 첫 줄만
+        title = after_title.replace("**", "").replace("*", "").strip()
+        title = title.split("\n")[0].strip()
 
     return {"title": title, "analysis": analysis, "script": script}
 
