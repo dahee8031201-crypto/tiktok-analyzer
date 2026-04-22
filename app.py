@@ -30,6 +30,13 @@ st.set_page_config(
 
 # ── 유틸 함수 ────────────────────────────────────────────────
 
+@st.cache_resource
+def _load_whisper(model_name: str):
+    """Whisper 모델 캐싱 - 한 번만 로드하고 재사용"""
+    from faster_whisper import WhisperModel
+    return WhisperModel(model_name, device="cpu", compute_type="int8")
+
+
 def _transcribe_single(model, audio_path: str) -> str:
     try:
         segments, _ = model.transcribe(
@@ -64,7 +71,6 @@ def run_analysis(urls, product_info, api_key, target_age, whisper_model,
                  keyword="탈모", notion_token=None, notion_page_id=None):
     """분석 실행 후 결과를 session_state에 저장"""
     from crawler import _download_audio
-    from faster_whisper import WhisperModel
     from analyzer import analyze_single_video
     from notion_exporter import save_video_to_notion
     from history import save_history
@@ -73,66 +79,70 @@ def run_analysis(urls, product_info, api_key, target_age, whisper_model,
     audio_dir = os.path.join(output_dir, "audio")
     os.makedirs(audio_dir, exist_ok=True)
 
+    n = len(urls)
+    total_steps = n * 3  # 다운로드 + 변환 + 분석
+
+    # DOM 안전: st.empty() 하나로 상태 표시, progress는 text 없이
     status = st.empty()
     progress_bar = st.progress(0)
-    log_area = st.empty()
-    logs = []
 
-    def update_log(msg):
-        logs.append(msg)
-        log_area.markdown("\n".join(f"- {m}" for m in logs[-8:]))
+    def set_status(msg, kind="info"):
+        if kind == "info":   status.info(msg)
+        elif kind == "success": status.success(msg)
+        elif kind == "error":   status.error(msg)
+        elif kind == "warning": status.warning(msg)
+
+    def set_progress(step):
+        progress_bar.progress(min(step / total_steps, 1.0))
 
     # ── 1단계: 다운로드 ──
-    status.info("📥 영상 다운로드 중...")
     videos = []
     for i, url in enumerate(urls):
-        progress_bar.progress((i + 1) / (len(urls) * 3), text=f"다운로드 ({i+1}/{len(urls)})")
-        update_log(f"⬇️ 다운로드 중: {url[:60]}...")
+        set_status(f"📥 다운로드 중... ({i+1}/{n})")
+        set_progress(i)
         audio_path = _download_audio(url, audio_dir, f"video_{i+1}_{int(datetime.now().timestamp())}")
         if audio_path:
-            videos.append({"url": url, "title": f"영상 {i+1}", "audio_path": audio_path, "views": 0, "likes": 0})
-            update_log(f"✅ 다운로드 완료: 영상 {i+1}")
+            videos.append({"url": url, "title": f"영상 {i+1}", "audio_path": audio_path})
         else:
-            update_log(f"❌ 다운로드 실패: {url[:60]}")
+            set_status(f"⚠️ 다운로드 실패: {url[:60]}", "warning")
 
     if not videos:
-        status.error("다운로드된 영상이 없습니다. URL을 확인해주세요.")
+        set_status("다운로드된 영상이 없습니다. URL을 확인해주세요.", "error")
         progress_bar.empty()
-        log_area.empty()
         return
 
-    # ── 2단계: 음성 변환 ──
-    status.info(f"🎙️ Whisper({whisper_model})로 음성 변환 중...")
-    update_log(f"🔄 Whisper {whisper_model} 모델 로딩 중...")
-
-    model = WhisperModel(whisper_model, device="cpu", compute_type="int8")
-    update_log("✅ Whisper 모델 준비 완료")
+    # ── 2단계: 음성 변환 (캐시된 모델 사용) ──
+    set_status(f"🎙️ Whisper({whisper_model}) 모델 로딩 중... (첫 실행만 오래 걸려요)")
+    set_progress(n)
+    model = _load_whisper(whisper_model)
 
     valid_videos = []
-    base = len(urls)
     for i, video in enumerate(videos):
-        progress_bar.progress((base + i + 1) / (len(urls) * 3), text=f"음성 변환 ({i+1}/{len(videos)})")
-        update_log(f"🎙️ 변환 중: {video['title']}")
+        set_status(f"🎙️ 음성 변환 중... ({i+1}/{len(videos)})")
+        set_progress(n + i)
         transcript = _transcribe_single(model, video["audio_path"])
         if len(transcript) >= 30:
             video["transcript"] = transcript
             valid_videos.append(video)
-            update_log(f"✅ 변환 완료: {video['title']} ({len(transcript)}자)")
         else:
-            update_log(f"⚠️ {video['title']}: 음성 내용 부족 (배경음악만 있는 영상으로 추정)")
+            set_status(f"⚠️ 영상 {i+1}: 음성 내용 부족 (배경음악만 있는 영상)", "warning")
 
     if not valid_videos:
-        status.error("변환된 음성 원고가 없습니다.")
+        set_status("변환된 음성 원고가 없습니다.", "error")
         progress_bar.empty()
-        log_area.empty()
         return
 
-    # ── 3단계: 분석 + 원고 생성 ──
-    status.info("🤖 Claude AI 분석 중...")
+    # ── 3단계: Claude 분석 + 원고 생성 ──
     all_results = []
+    product_name_extracted = ""
+    for line in product_info.split("\n"):
+        if "제품명" in line:
+            product_name_extracted = line.split(":")[-1].strip()
+            break
+
     for i, video in enumerate(valid_videos):
-        progress_bar.progress((base * 2 + i + 1) / (len(urls) * 3), text=f"AI 분석 ({i+1}/{len(valid_videos)})")
-        update_log(f"🔍 Claude 분석 중: {video['title']}")
+        set_status(f"🤖 Claude AI 분석 중... ({i+1}/{len(valid_videos)})")
+        set_progress(n * 2 + i)
 
         result = analyze_single_video(
             transcript=video["transcript"],
@@ -140,7 +150,6 @@ def run_analysis(urls, product_info, api_key, target_age, whisper_model,
             api_key=api_key,
             target_age=target_age,
         )
-        update_log(f"✅ 분석 완료: {video['title']} → 제목: {result.get('title','')}")
 
         # 노션 저장
         notion_url = None
@@ -157,16 +166,10 @@ def run_analysis(urls, product_info, api_key, target_age, whisper_model,
                     script=result["script"],
                     thumbnail_title=result.get("title", ""),
                 )
-                update_log(f"📒 노션 저장 완료: {video['title']}")
             except Exception as e:
-                update_log(f"⚠️ 노션 저장 실패: {e}")
+                set_status(f"⚠️ 노션 저장 실패 (영상 {i+1}): {e}", "warning")
 
         # 이력 저장
-        product_name_extracted = ""
-        for line in product_info.split("\n"):
-            if "제품명" in line:
-                product_name_extracted = line.split(":")[-1].strip()
-                break
         save_history(
             keyword=keyword,
             product_name=product_name_extracted,
@@ -185,15 +188,11 @@ def run_analysis(urls, product_info, api_key, target_age, whisper_model,
             "notion_url": notion_url,
         })
 
-    # 로컬 파일 저장
-    saved_path = save_results_to_file(all_results, target_age)
-    update_log(f"💾 로컬 파일 저장: {saved_path}")
+    # 완료
+    save_results_to_file(all_results, target_age)
+    set_progress(total_steps)
+    set_status(f"🎉 완료! 총 {len(all_results)}개 원고 생성됨", "success")
 
-    progress_bar.progress(1.0, text="✅ 분석 완료!")
-    status.success(f"🎉 분석 완료! 총 {len(all_results)}개 원고 생성됨")
-    log_area.empty()
-
-    # session_state에 결과 저장
     st.session_state["analysis_results"] = all_results
     st.session_state["analysis_done"] = True
 
