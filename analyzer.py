@@ -171,8 +171,14 @@ def analyze_single_video(
     Returns:
         {"analysis": "분석결과", "script": "생성된 원고"}
     """
+    # API 키 앞뒤 공백/개행 제거
+    api_key = api_key.strip()
     client = anthropic.Anthropic(api_key=api_key)
     age_context = _get_age_context(target_age)
+
+    # 트랜스크립트가 너무 길면 잘라냄 (토큰 초과 방지)
+    if len(transcript) > 3000:
+        transcript = transcript[:3000] + "..."
 
     # 분석 + 원고 생성을 한 번에 요청
     response = client.messages.create(

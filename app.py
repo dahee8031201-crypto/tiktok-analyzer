@@ -144,12 +144,17 @@ def run_analysis(urls, product_info, api_key, target_age, whisper_model,
         set_status(f"🤖 Claude AI 분석 중... ({i+1}/{len(valid_videos)})")
         set_progress(n * 2 + i)
 
-        result = analyze_single_video(
-            transcript=video["transcript"],
-            product_info=product_info,
-            api_key=api_key,
-            target_age=target_age,
-        )
+        try:
+            result = analyze_single_video(
+                transcript=video["transcript"],
+                product_info=product_info,
+                api_key=api_key,
+                target_age=target_age,
+            )
+        except Exception as e:
+            set_status(f"❌ Claude API 오류 (영상 {i+1}): {type(e).__name__}: {str(e)}", "error")
+            st.error(f"상세 오류: {str(e)}")
+            continue
 
         # 노션 저장
         notion_url = None
