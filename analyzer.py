@@ -71,7 +71,7 @@ def _analyze_patterns(client: anthropic.Anthropic, transcripts_text: str, target
     age_context = _get_age_context(target_age)
 
     response = client.messages.create(
-        model="claude-3-5-sonnet-20241022",
+        model="claude-3-haiku-20240307",
         max_tokens=1500,
         messages=[{
             "role": "user",
@@ -106,7 +106,7 @@ def _generate_scripts(
     age_context = _get_age_context(target_age)
 
     response = client.messages.create(
-        model="claude-3-5-sonnet-20241022",
+        model="claude-3-haiku-20240307",
         max_tokens=3000,
         messages=[{
             "role": "user",
@@ -182,7 +182,7 @@ def analyze_single_video(
 
     # 분석 + 원고 생성을 한 번에 요청
     response = client.messages.create(
-        model="claude-3-5-sonnet-20241022",
+        model="claude-3-haiku-20240307",
         max_tokens=2000,
         messages=[{
             "role": "user",
